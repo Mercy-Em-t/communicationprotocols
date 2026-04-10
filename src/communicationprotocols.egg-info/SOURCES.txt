@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+src/__init__.py
+src/messaging_service.py
+src/models.py
+src/notification_service.py
+src/operations_dashboard.py
+src/order_service.py
+src/communicationprotocols.egg-info/PKG-INFO
+src/communicationprotocols.egg-info/SOURCES.txt
+src/communicationprotocols.egg-info/dependency_links.txt
+src/communicationprotocols.egg-info/requires.txt
+src/communicationprotocols.egg-info/top_level.txt
+tests/test_messaging.py
