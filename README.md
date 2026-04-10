@@ -82,6 +82,21 @@ PROCESSED → CANCELLED
 ```
 Invalid transitions raise `OrderTransitionError`.
 
+### 7. Tenant isolation and RBAC
+Core entities include `tenant_id`, and service-level checks enforce same-tenant data access. Role-aware actions are supported via `AuthContext` (`customer`, `business`, `operations`, `system`).
+
+### 8. Idempotency and duplicate protection
+`NotificationService.place_order(..., idempotency_key="...")` returns the original order for repeated keys, preventing duplicate order creation from repeated clicks/retries.
+
+### 9. Inventory reservation with atomic checks
+`InventoryService` supports atomic reserve/release to avoid overselling. Stock is reserved on order creation and released automatically when an order is cancelled.
+
+### 10. Delivery reliability (outbox/retries/dead-letter)
+Messages are tracked with delivery status, retry attempts, and dead-letter promotion after max retries. This provides a clear failure trail for WhatsApp/API outages.
+
+### 11. SLA escalation + audit trail
+`NotificationService.check_sla_breaches()` raises operations alerts for stale pending orders once per order, and key actions are written to immutable audit events with retention pruning.
+
 ---
 
 ## Quick start
@@ -123,6 +138,12 @@ svc.trigger_operations_alert(
     NotificationTrigger.STOCK_OUT,
     detail="Chia Seeds out of stock",
 )
+
+# Idempotent create (prevents duplicates)
+same_order = svc.place_order(customer, business, items, idempotency_key="req-123")
+
+# SLA check (alerts ops for stale pending orders)
+svc.check_sla_breaches()
 ```
 
 ---

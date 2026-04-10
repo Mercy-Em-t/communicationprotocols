@@ -14,7 +14,8 @@ Design principles
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Set
 
 from .models import (
     Message,
@@ -22,7 +23,9 @@ from .models import (
     MessageThread,
     Order,
     OrderStatus,
+    DeliveryStatus,
 )
+from .persistence import JsonPersistence, deserialize_threads, serialize_thread
 
 
 class MessagingService:
@@ -33,9 +36,17 @@ class MessagingService:
     is logged in the correct thread before delivery simulation.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, persistence: Optional[JsonPersistence] = None,
+                 max_delivery_attempts: int = 3,
+                 fail_channels: Optional[Set[MessageChannel]] = None) -> None:
         # Indexed by order_id for O(1) thread lookup
         self._threads: Dict[str, MessageThread] = {}
+        self.persistence = persistence or JsonPersistence()
+        self.max_delivery_attempts = max_delivery_attempts
+        self.fail_channels = fail_channels or set()
+        self._outbox: List[str] = []  # message ids
+        self._dead_letters: List[str] = []  # message ids
+        self._load()
 
     # ------------------------------------------------------------------
     # Thread management
@@ -47,8 +58,13 @@ class MessagingService:
             self._threads[order.order_id] = MessageThread.create(order)
         return self._threads[order.order_id]
 
-    def get_thread(self, order_id: str) -> Optional[MessageThread]:
-        return self._threads.get(order_id)
+    def get_thread(self, order_id: str, tenant_id: Optional[str] = None) -> Optional[MessageThread]:
+        thread = self._threads.get(order_id)
+        if thread is None:
+            return None
+        if tenant_id is not None and thread.tenant_id != tenant_id:
+            return None
+        return thread
 
     # ------------------------------------------------------------------
     # Low-level send
@@ -76,9 +92,12 @@ class MessagingService:
             recipient=recipient,
             channel=channel,
             body=body,
+            tenant_id=order.tenant_id,
         )
         thread.add_message(message)
-        self._deliver(message)
+        self._outbox.append(message.message_id)
+        self._dispatch_outbox(order.order_id)
+        self._save()
         return message
 
     # ------------------------------------------------------------------
@@ -207,7 +226,68 @@ class MessagingService:
         Simulate delivery over the message's channel.
 
         In production this would call the WhatsApp Business API, SMS
-        gateway, push notification service, etc.
+        gateway, push notification service, etc. The prototype routes
+        actual state changes through ``_attempt_delivery``; this method
+        is intentionally left unimplemented as an explicit extension point
+        for real channel integrations.
         """
-        # No-op in this implementation — real integrations plug in here.
-        pass
+        raise NotImplementedError
+
+    def _dispatch_outbox(self, order_id: Optional[str] = None) -> None:
+        targets = []
+        for thread in self._threads.values():
+            if order_id is not None and thread.order_id != order_id:
+                continue
+            targets.extend(thread.messages)
+
+        message_lookup = {m.message_id: m for m in targets}
+        remaining: List[str] = []
+        for message_id in self._outbox:
+            message = message_lookup.get(message_id)
+            if message is None:
+                continue
+            if message.delivery_status in {DeliveryStatus.DELIVERED, DeliveryStatus.DEAD_LETTER}:
+                continue
+            try:
+                self._attempt_delivery(message)
+            except RuntimeError as exc:
+                message.last_error = str(exc)
+                if message.delivery_attempts >= self.max_delivery_attempts:
+                    message.delivery_status = DeliveryStatus.DEAD_LETTER
+                    self._dead_letters.append(message.message_id)
+                else:
+                    message.delivery_status = DeliveryStatus.FAILED
+                    remaining.append(message.message_id)
+        self._outbox = remaining
+
+    def _attempt_delivery(self, message: Message) -> None:
+        message.delivery_attempts += 1
+        if message.channel in self.fail_channels:
+            raise RuntimeError(f"Channel {message.channel.value} unavailable.")
+        message.delivery_status = DeliveryStatus.DELIVERED
+        message.delivered_at = datetime.now(tz=timezone.utc)
+        message.last_error = None
+
+    def get_dead_letters(self) -> List[Message]:
+        dead_ids = set(self._dead_letters)
+        out: List[Message] = []
+        for thread in self._threads.values():
+            for msg in thread.messages:
+                if msg.message_id in dead_ids:
+                    out.append(msg)
+        return out
+
+    def _save(self) -> None:
+        self.persistence.save(
+            {
+                "threads": [serialize_thread(t) for t in self._threads.values()],
+                "outbox": self._outbox,
+                "dead_letters": self._dead_letters,
+            }
+        )
+
+    def _load(self) -> None:
+        payload = self.persistence.load()
+        self._threads = deserialize_threads(payload.get("threads", []))
+        self._outbox = payload.get("outbox", [])
+        self._dead_letters = payload.get("dead_letters", [])

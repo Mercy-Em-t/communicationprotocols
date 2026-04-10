@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 
 class OrderStatus(Enum):
@@ -36,6 +36,15 @@ class NotificationTrigger(Enum):
     STOCK_OUT = "stock_out"
     FRAUD_ANOMALY = "fraud_anomaly"
     HIGH_VALUE_ORDER = "high_value_order"
+    SLA_BREACH = "sla_breach"
+
+
+class DeliveryStatus(Enum):
+    """Delivery status for outbound messages."""
+    PENDING = "pending"
+    DELIVERED = "delivered"
+    FAILED = "failed"
+    DEAD_LETTER = "dead_letter"
 
 
 @dataclass
@@ -44,15 +53,18 @@ class Customer:
     customer_id: str
     name: str
     phone: str
+    tenant_id: str = "default"
     preferred_channel: MessageChannel = MessageChannel.WHATSAPP
 
     @staticmethod
     def create(name: str, phone: str,
-               preferred_channel: MessageChannel = MessageChannel.WHATSAPP) -> "Customer":
+               preferred_channel: MessageChannel = MessageChannel.WHATSAPP,
+               tenant_id: str = "default") -> "Customer":
         return Customer(
             customer_id=str(uuid.uuid4()),
             name=name,
             phone=phone,
+            tenant_id=tenant_id,
             preferred_channel=preferred_channel,
         )
 
@@ -63,13 +75,15 @@ class Business:
     business_id: str
     name: str
     phone: str
+    tenant_id: str = "default"
 
     @staticmethod
-    def create(name: str, phone: str) -> "Business":
+    def create(name: str, phone: str, tenant_id: str = "default") -> "Business":
         return Business(
             business_id=str(uuid.uuid4()),
             name=name,
             phone=phone,
+            tenant_id=tenant_id,
         )
 
 
@@ -91,7 +105,7 @@ class Amendment:
     amendment_id: str
     order_id: str
     description: str
-    changed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    changed_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
     @staticmethod
     def create(order_id: str, description: str) -> "Amendment":
@@ -113,16 +127,19 @@ class Order:
     order_id: str
     customer: Customer
     business: Business
+    tenant_id: str
     items: List[OrderItem]
     status: OrderStatus = OrderStatus.PENDING
     amendments: List[Amendment] = field(default_factory=list)
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
     @staticmethod
     def create(customer: Customer, business: Business,
                items: List[OrderItem]) -> "Order":
-        now = datetime.now(timezone.utc)
+        if customer.tenant_id != business.tenant_id:
+            raise ValueError("Customer and business must belong to the same tenant.")
+        now = datetime.now(tz=timezone.utc)
         date_str = now.strftime("%Y%m%d")
         short_id = str(uuid.uuid4())[:4].upper()
         order_id = f"ORD-{date_str}-{short_id}"
@@ -130,6 +147,7 @@ class Order:
             order_id=order_id,
             customer=customer,
             business=business,
+            tenant_id=customer.tenant_id,
             items=items,
             created_at=now,
             updated_at=now,
@@ -143,7 +161,7 @@ class Order:
         """Record an immutable amendment and update the order timestamp."""
         amendment = Amendment.create(self.order_id, description)
         self.amendments.append(amendment)
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(tz=timezone.utc)
         return amendment
 
 
@@ -156,11 +174,16 @@ class Message:
     recipient: str       # "customer", "business", or "operations"
     channel: MessageChannel
     body: str
-    sent_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    tenant_id: str
+    delivery_status: DeliveryStatus = DeliveryStatus.PENDING
+    delivery_attempts: int = 0
+    last_error: Optional[str] = None
+    sent_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    delivered_at: Optional[datetime] = None
 
     @staticmethod
     def create(order_id: str, sender: str, recipient: str,
-               channel: MessageChannel, body: str) -> "Message":
+               channel: MessageChannel, body: str, tenant_id: str) -> "Message":
         return Message(
             message_id=str(uuid.uuid4()),
             order_id=order_id,
@@ -168,6 +191,7 @@ class Message:
             recipient=recipient,
             channel=channel,
             body=body,
+            tenant_id=tenant_id,
         )
 
 
@@ -181,6 +205,7 @@ class MessageThread:
     """
     thread_id: str
     order_id: str
+    tenant_id: str
     customer_id: str
     business_id: str
     messages: List[Message] = field(default_factory=list)
@@ -190,9 +215,39 @@ class MessageThread:
         return MessageThread(
             thread_id=str(uuid.uuid4()),
             order_id=order.order_id,
+            tenant_id=order.tenant_id,
             customer_id=order.customer.customer_id,
             business_id=order.business.business_id,
         )
 
     def add_message(self, message: Message) -> None:
         self.messages.append(message)
+
+
+@dataclass
+class AuditEvent:
+    """Immutable audit event for actions and access."""
+    event_id: str
+    tenant_id: str
+    actor_role: str
+    actor_id: str
+    action: str
+    resource_type: str
+    resource_id: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+    @staticmethod
+    def create(tenant_id: str, actor_role: str, actor_id: str, action: str,
+               resource_type: str, resource_id: str,
+               metadata: Optional[Dict[str, Any]] = None) -> "AuditEvent":
+        return AuditEvent(
+            event_id=str(uuid.uuid4()),
+            tenant_id=tenant_id,
+            actor_role=actor_role,
+            actor_id=actor_id,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            metadata=metadata or {},
+        )

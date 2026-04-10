@@ -67,7 +67,10 @@ class OperationsDashboard:
     # Summary
     # ------------------------------------------------------------------
 
-    def generate_report(self) -> DashboardReport:
+    def generate_report(self, *, tenant_id: Optional[str] = None,
+                        business_id: Optional[str] = None,
+                        status: Optional[OrderStatus] = None,
+                        page: int = 1, page_size: int = 50) -> DashboardReport:
         """
         Build the full dashboard snapshot.
 
@@ -77,7 +80,11 @@ class OperationsDashboard:
         """
         by_business: Dict[str, BusinessSummary] = {}
 
-        for order in self._orders.get_all_orders():
+        for order in self._orders.get_all_orders(tenant_id=tenant_id):
+            if business_id is not None and order.business.business_id != business_id:
+                continue
+            if status is not None and order.status != status:
+                continue
             bid = order.business.business_id
             if bid not in by_business:
                 by_business[bid] = BusinessSummary(
@@ -98,9 +105,12 @@ class OperationsDashboard:
             elif order.status == OrderStatus.CANCELLED:
                 summary.cancelled += 1
 
-        alerts = self._collect_ops_alerts()
+        all_summaries = list(by_business.values())
+        start = max(0, (page - 1) * page_size)
+        end = start + page_size
+        alerts = self._collect_ops_alerts(tenant_id=tenant_id, page=page, page_size=page_size)
         return DashboardReport(
-            summaries=list(by_business.values()),
+            summaries=all_summaries[start:end],
             operations_alerts=alerts,
         )
 
@@ -108,30 +118,35 @@ class OperationsDashboard:
     # Drill-down
     # ------------------------------------------------------------------
 
-    def get_order_thread(self, order_id: str) -> Optional[MessageThread]:
+    def get_order_thread(self, order_id: str,
+                         tenant_id: Optional[str] = None) -> Optional[MessageThread]:
         """
         Retrieve the full message thread for a specific order.
 
         Used only when operations need to investigate a flagged order.
         """
-        return self._messages.get_thread(order_id)
+        return self._messages.get_thread(order_id, tenant_id=tenant_id)
 
-    def get_business_orders(self, business_id: str) -> List[Order]:
+    def get_business_orders(self, business_id: str,
+                            tenant_id: Optional[str] = None) -> List[Order]:
         """Return all orders for a specific business."""
-        return self._orders.get_orders_for_business(business_id)
+        return self._orders.get_orders_for_business(business_id, tenant_id=tenant_id)
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
-    def _collect_ops_alerts(self) -> List[Message]:
+    def _collect_ops_alerts(self, tenant_id: Optional[str] = None,
+                            page: int = 1, page_size: int = 50) -> List[Message]:
         """Gather all messages addressed to operations across all threads."""
         alerts: List[Message] = []
-        for order in self._orders.get_all_orders():
-            thread = self._messages.get_thread(order.order_id)
+        for order in self._orders.get_all_orders(tenant_id=tenant_id):
+            thread = self._messages.get_thread(order.order_id, tenant_id=tenant_id)
             if thread is None:
                 continue
             for msg in thread.messages:
                 if msg.recipient == "operations":
                     alerts.append(msg)
-        return alerts
+        start = max(0, (page - 1) * page_size)
+        end = start + page_size
+        return alerts[start:end]

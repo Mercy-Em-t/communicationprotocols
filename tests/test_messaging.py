@@ -13,9 +13,12 @@ Covers:
 
 import pytest
 
+from src.auth import AuthContext, AuthorizationError, Role
+from src.inventory_service import InventoryService, InventoryError
 from src.models import (
     Business,
     Customer,
+    DeliveryStatus,
     MessageChannel,
     NotificationTrigger,
     OrderItem,
@@ -24,6 +27,7 @@ from src.models import (
 from src.notification_service import NotificationService
 from src.operations_dashboard import OperationsDashboard
 from src.order_service import HIGH_VALUE_THRESHOLD, OrderService, OrderTransitionError
+from src.messaging_service import MessagingService
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +234,7 @@ class TestFloodPrevention:
 
         for i in range(500):
             cust = Customer.create(f"Customer {i}",
-                                   f"+2547{i % 100_000_000:08d}")
+                                   f"+2547{i:08d}")
             order = svc.place_order(cust, business, [OrderItem("Product", 1, 50.0)])
             thread = svc.messages.get_thread(order.order_id)
             for msg in thread.messages:
@@ -366,3 +370,93 @@ class TestPreferredChannel:
         thread = svc.messages.get_thread(order.order_id)
         customer_msgs = [m for m in thread.messages if m.recipient == "customer"]
         assert all(m.channel == MessageChannel.SMS for m in customer_msgs)
+
+
+class TestIdempotency:
+    def test_place_order_with_same_idempotency_key_returns_same_order(self, customer, business, basic_items):
+        svc = NotificationService()
+        order1 = svc.place_order(customer, business, basic_items, idempotency_key="k1")
+        order2 = svc.place_order(customer, business, basic_items, idempotency_key="k1")
+        assert order1.order_id == order2.order_id
+        assert len(svc.orders.get_all_orders()) == 1
+
+
+class TestTenantIsolationAndRbac:
+    def test_cross_tenant_order_creation_rejected(self, basic_items):
+        customer = Customer.create("Mercy", "+254700000001", tenant_id="t1")
+        business = Business.create("Healthy Eats", "+254711111111", tenant_id="t2")
+        svc = NotificationService()
+        with pytest.raises(ValueError):
+            svc.place_order(customer, business, basic_items)
+
+    def test_customer_cannot_read_other_customer_order(self, basic_items):
+        svc = NotificationService()
+        c1 = Customer.create("Mercy", "+254700000001", tenant_id="t1")
+        c2 = Customer.create("Alice", "+254700000002", tenant_id="t1")
+        business = Business.create("Healthy Eats", "+254711111111", tenant_id="t1")
+        order = svc.place_order(c1, business, basic_items)
+        actor = AuthContext(role=Role.CUSTOMER, actor_id=c2.customer_id, tenant_id="t1")
+        with pytest.raises(AuthorizationError):
+            svc.orders.get_order(order.order_id, actor=actor)
+
+    def test_business_cannot_advance_other_business_order(self, basic_items):
+        svc = NotificationService()
+        customer = Customer.create("Mercy", "+254700000001", tenant_id="t1")
+        b1 = Business.create("B1", "+254711111111", tenant_id="t1")
+        b2 = Business.create("B2", "+254722222222", tenant_id="t1")
+        order = svc.place_order(customer, b1, basic_items)
+        actor = AuthContext(role=Role.BUSINESS, actor_id=b2.business_id, tenant_id="t1")
+        with pytest.raises(AuthorizationError):
+            svc.advance_order(order.order_id, OrderStatus.PROCESSED, actor=actor)
+
+
+class TestInventoryReservation:
+    def test_insufficient_stock_blocks_order(self, customer, business):
+        inventory = InventoryService()
+        inventory.set_stock(customer.tenant_id, "Chia Seeds", 1)
+        svc = NotificationService(order_service=OrderService(inventory_service=inventory))
+        with pytest.raises(InventoryError):
+            svc.place_order(customer, business, [OrderItem("Chia Seeds", 2, 200.0)])
+
+    def test_cancelled_order_releases_stock(self, customer, business):
+        inventory = InventoryService()
+        inventory.set_stock(customer.tenant_id, "Chia Seeds", 2)
+        svc = NotificationService(order_service=OrderService(inventory_service=inventory))
+        order = svc.place_order(customer, business, [OrderItem("Chia Seeds", 2, 200.0)])
+        assert inventory.get_stock(customer.tenant_id, "Chia Seeds") == 0
+        svc.advance_order(order.order_id, OrderStatus.CANCELLED)
+        assert inventory.get_stock(customer.tenant_id, "Chia Seeds") == 2
+
+
+class TestMessageReliability:
+    def test_failed_channel_retries_then_dead_letters(self, customer, business, basic_items):
+        messaging = MessagingService(fail_channels={MessageChannel.WHATSAPP}, max_delivery_attempts=2)
+        svc = NotificationService(messaging_service=messaging)
+        order = svc.place_order(customer, business, basic_items)
+        thread = svc.messages.get_thread(order.order_id)
+        customer_msg = next(m for m in thread.messages if m.recipient == "customer")
+
+        # first send failed once and remained in outbox; run second dispatch to dead-letter
+        svc.messages._dispatch_outbox(order.order_id)
+        assert customer_msg.delivery_attempts == 2
+        assert customer_msg.delivery_status == DeliveryStatus.DEAD_LETTER
+        assert len(svc.messages.get_dead_letters()) >= 1
+
+
+class TestSlaAndPagination:
+    def test_sla_breach_alerts_once(self, customer, business, basic_items):
+        svc = NotificationService(sla_minutes=0)
+        order = svc.place_order(customer, business, basic_items)
+        first = svc.check_sla_breaches()
+        second = svc.check_sla_breaches()
+        assert order.order_id in first
+        assert second == []
+
+    def test_dashboard_pagination_limits_results(self, business, basic_items):
+        svc = NotificationService()
+        dashboard = OperationsDashboard(svc.orders, svc.messages)
+        for i in range(3):
+            c = Customer.create(f"C{i}", f"+25470000000{i}")
+            svc.place_order(c, business, basic_items)
+        report = dashboard.generate_report(page=1, page_size=1)
+        assert len(report.summaries) == 1
