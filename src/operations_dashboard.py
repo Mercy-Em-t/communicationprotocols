@@ -5,7 +5,6 @@ Operations dashboard — aggregated, read-only lifecycle view for operations.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from .messaging_service import MessagingService
@@ -58,7 +57,6 @@ class OperationsDashboard:
                         status: Optional[OrderStatus] = None,
                         page: int = 1, page_size: int = 50) -> DashboardReport:
         by_business: Dict[str, BusinessSummary] = {}
-        now = datetime.now(tz=timezone.utc)
 
         filtered_orders: List[Order] = []
         for order in self._orders.get_all_orders(tenant_id=tenant_id):

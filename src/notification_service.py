@@ -476,7 +476,7 @@ class NotificationService:
                                metadata: Optional[Dict[str, str]] = None) -> Order:
         existing = self.orders.get_order_or_raise(order_id)
         from_status = existing.status
-        updated = self.orders.advance_order(order_id, new_status, actor=actor)
+        updated = self.orders.advance_order(order_id, new_status, actor=None)
         self._record_order_event(
             updated,
             event_type=event_type,
