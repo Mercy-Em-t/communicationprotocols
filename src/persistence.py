@@ -17,6 +17,7 @@ from .models import (
     MessageChannel,
     MessageThread,
     Order,
+    OrderEvent,
     OrderItem,
     OrderStatus,
 )
@@ -128,6 +129,22 @@ def _audit_from_dict(d: Dict[str, Any]) -> AuditEvent:
     )
 
 
+def _order_event_from_dict(d: Dict[str, Any]) -> OrderEvent:
+    return OrderEvent(
+        event_id=d["event_id"],
+        order_id=d["order_id"],
+        tenant_id=d["tenant_id"],
+        event_type=d["event_type"],
+        from_status=d.get("from_status"),
+        to_status=d.get("to_status"),
+        trigger=d["trigger"],
+        actor_role=d["actor_role"],
+        actor_id=d["actor_id"],
+        metadata=d.get("metadata", {}),
+        created_at=_dt(d["created_at"]),
+    )
+
+
 class JsonPersistence:
     """
     Tiny JSON-based persistence for this prototype.
@@ -186,3 +203,11 @@ def serialize_audit(event: AuditEvent) -> Dict[str, Any]:
 
 def deserialize_audits(payload: List[Dict[str, Any]]) -> List[AuditEvent]:
     return [_audit_from_dict(a) for a in payload]
+
+
+def serialize_order_event(event: OrderEvent) -> Dict[str, Any]:
+    return asdict(event)
+
+
+def deserialize_order_events(payload: List[Dict[str, Any]]) -> List[OrderEvent]:
+    return [_order_event_from_dict(e) for e in payload]

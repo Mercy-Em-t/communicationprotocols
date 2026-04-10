@@ -2,9 +2,12 @@
 Order service — manages order lifecycle and state transitions.
 
 Valid transitions:
-  PENDING → PROCESSED → DELIVERED
-  PENDING → CANCELLED
-  PROCESSED → CANCELLED
+  CREATED → PENDING_SHOP_CONFIRMATION
+  PENDING_SHOP_CONFIRMATION → ACCEPTED_BY_SHOP | REJECTED_BY_SHOP
+  ACCEPTED_BY_SHOP → AWAITING_CUSTOMER_CONFIRMATION → AWAITING_PAYMENT
+  AWAITING_PAYMENT → PAYMENT_PROCESSING → PAID
+  PAID → FULFILLING → READY_FOR_PICKUP | OUT_FOR_DELIVERY → COMPLETED
+  CANCELLED can occur in mutable states
 """
 
 from __future__ import annotations
@@ -28,9 +31,39 @@ from .persistence import JsonPersistence, deserialize_orders, serialize_order
 HIGH_VALUE_THRESHOLD = 5_000.0
 
 ALLOWED_TRANSITIONS: Dict[OrderStatus, List[OrderStatus]] = {
-    OrderStatus.PENDING: [OrderStatus.PROCESSED, OrderStatus.CANCELLED],
-    OrderStatus.PROCESSED: [OrderStatus.DELIVERED, OrderStatus.CANCELLED],
-    OrderStatus.DELIVERED: [],
+    OrderStatus.CREATED: [OrderStatus.PENDING_SHOP_CONFIRMATION, OrderStatus.CANCELLED],
+    OrderStatus.PENDING_SHOP_CONFIRMATION: [
+        OrderStatus.ACCEPTED_BY_SHOP,
+        OrderStatus.REJECTED_BY_SHOP,
+        OrderStatus.CANCELLED,
+    ],
+    OrderStatus.REJECTED_BY_SHOP: [],
+    OrderStatus.ACCEPTED_BY_SHOP: [
+        OrderStatus.AWAITING_CUSTOMER_CONFIRMATION,
+        OrderStatus.CANCELLED,
+    ],
+    OrderStatus.AWAITING_CUSTOMER_CONFIRMATION: [
+        OrderStatus.AWAITING_PAYMENT,
+        OrderStatus.CANCELLED,
+    ],
+    OrderStatus.AWAITING_PAYMENT: [
+        OrderStatus.PAYMENT_PROCESSING,
+        OrderStatus.CANCELLED,
+    ],
+    OrderStatus.PAYMENT_PROCESSING: [
+        OrderStatus.PAID,
+        OrderStatus.AWAITING_PAYMENT,
+        OrderStatus.CANCELLED,
+    ],
+    OrderStatus.PAID: [OrderStatus.FULFILLING, OrderStatus.CANCELLED],
+    OrderStatus.FULFILLING: [
+        OrderStatus.READY_FOR_PICKUP,
+        OrderStatus.OUT_FOR_DELIVERY,
+        OrderStatus.CANCELLED,
+    ],
+    OrderStatus.READY_FOR_PICKUP: [OrderStatus.COMPLETED, OrderStatus.CANCELLED],
+    OrderStatus.OUT_FOR_DELIVERY: [OrderStatus.COMPLETED, OrderStatus.CANCELLED],
+    OrderStatus.COMPLETED: [],
     OrderStatus.CANCELLED: [],
 }
 
@@ -70,7 +103,7 @@ class OrderService:
                      items: List[OrderItem], *,
                      idempotency_key: Optional[str] = None,
                      actor: Optional[AuthContext] = None) -> Order:
-        """Create a new order and persist it."""
+        """Create a new order and persist it (initial state: CREATED)."""
         if actor is not None and actor.role != Role.SYSTEM:
             if actor.role != Role.CUSTOMER or actor.actor_id != customer.customer_id:
                 raise PermissionError("Only the customer can create their order.")
@@ -141,7 +174,7 @@ class OrderService:
             )
         order.status = new_status
         order.updated_at = datetime.now(tz=timezone.utc)
-        if new_status == OrderStatus.CANCELLED:
+        if new_status in {OrderStatus.CANCELLED, OrderStatus.REJECTED_BY_SHOP}:
             self.inventory.release_for_order(order.order_id)
         self._save()
         return order
@@ -153,7 +186,7 @@ class OrderService:
     def amend_order(self, order_id: str, description: str,
                     actor: Optional[AuthContext] = None) -> Amendment:
         """
-        Record an amendment on an order that is still PENDING.
+        Record an amendment while the order is still modifiable.
 
         Amendments are immutable records appended to the order's audit trail.
         """
@@ -165,7 +198,10 @@ class OrderService:
         authorize_order_action(
             actor, order, (Role.CUSTOMER, Role.BUSINESS, Role.OPERATIONS, Role.SYSTEM)
         )
-        if order.status != OrderStatus.PENDING:
+        if order.status not in {
+            OrderStatus.PENDING_SHOP_CONFIRMATION,
+            OrderStatus.AWAITING_CUSTOMER_CONFIRMATION,
+        }:
             raise OrderTransitionError(
                 f"Order {order_id} cannot be amended in "
                 f"{order.status.value} state."
@@ -186,7 +222,7 @@ class OrderService:
         cutoff = datetime.now(tz=timezone.utc) - timedelta(minutes=max_age_minutes)
         return [
             o for o in self.get_all_orders(tenant_id=tenant_id)
-            if o.status == OrderStatus.PENDING and o.created_at <= cutoff
+            if o.status == OrderStatus.PENDING_SHOP_CONFIRMATION and o.created_at <= cutoff
         ]
 
     def _get_or_raise(self, order_id: str) -> Order:

@@ -17,9 +17,18 @@ from typing import List, Optional, Dict, Any
 
 class OrderStatus(Enum):
     """Lifecycle states for an order."""
-    PENDING = "pending"
-    PROCESSED = "processed"
-    DELIVERED = "delivered"
+    CREATED = "created"
+    PENDING_SHOP_CONFIRMATION = "pending_shop_confirmation"
+    REJECTED_BY_SHOP = "rejected_by_shop"
+    ACCEPTED_BY_SHOP = "accepted_by_shop"
+    AWAITING_CUSTOMER_CONFIRMATION = "awaiting_customer_confirmation"
+    AWAITING_PAYMENT = "awaiting_payment"
+    PAYMENT_PROCESSING = "payment_processing"
+    PAID = "paid"
+    FULFILLING = "fulfilling"
+    READY_FOR_PICKUP = "ready_for_pickup"
+    OUT_FOR_DELIVERY = "out_for_delivery"
+    COMPLETED = "completed"
     CANCELLED = "cancelled"
 
 
@@ -122,14 +131,14 @@ class Order:
     An atomic order placed by one customer with one business.
 
     Each order has its own message thread and immutable audit trail.
-    Status transitions: PENDING → PROCESSED → DELIVERED (or CANCELLED).
+    Status transitions are enforced by OrderService.
     """
     order_id: str
     customer: Customer
     business: Business
     tenant_id: str
     items: List[OrderItem]
-    status: OrderStatus = OrderStatus.PENDING
+    status: OrderStatus = OrderStatus.CREATED
     amendments: List[Amendment] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
@@ -222,6 +231,40 @@ class MessageThread:
 
     def add_message(self, message: Message) -> None:
         self.messages.append(message)
+
+
+@dataclass
+class OrderEvent:
+    """Immutable order lifecycle event for reporting and traceability."""
+    event_id: str
+    order_id: str
+    tenant_id: str
+    event_type: str
+    from_status: Optional[str]
+    to_status: Optional[str]
+    trigger: str
+    actor_role: str
+    actor_id: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+    @staticmethod
+    def create(order_id: str, tenant_id: str, event_type: str, *,
+               from_status: Optional[str], to_status: Optional[str],
+               trigger: str, actor_role: str, actor_id: str,
+               metadata: Optional[Dict[str, Any]] = None) -> "OrderEvent":
+        return OrderEvent(
+            event_id=str(uuid.uuid4()),
+            order_id=order_id,
+            tenant_id=tenant_id,
+            event_type=event_type,
+            from_status=from_status,
+            to_status=to_status,
+            trigger=trigger,
+            actor_role=actor_role,
+            actor_id=actor_id,
+            metadata=metadata or {},
+        )
 
 
 @dataclass

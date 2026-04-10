@@ -114,20 +114,81 @@ class MessagingService:
         body = (
             f"Hi {order.customer.name}, your order {order.order_id} has been "
             f"received.\n\n{items_text}\n\nTotal: KES {order.total:,.0f}\n\n"
-            "You can reply with changes before it is processed."
+            "We have sent it to the shop for confirmation."
         )
+        return self.send_message(order, sender="business",
+                                 recipient="customer", body=body)
+
+    def notify_shop_decision_request(self, order: Order) -> Message:
+        items_text = self._format_items_summary(order)
+        body = (
+            f"Order {order.order_id} from {order.customer.name}. "
+            f"Items: {items_text}. Reply 1 to accept or 2 to reject."
+        )
+        return self.send_message(order, sender="system",
+                                 recipient="business", body=body,
+                                 channel=MessageChannel.WHATSAPP)
+
+    def notify_shop_decision_outcome(self, order: Order) -> Message:
+        if order.status == OrderStatus.ACCEPTED_BY_SHOP:
+            body = (
+                f"Good news — shop accepted order {order.order_id}. "
+                "Please confirm your items to proceed."
+            )
+        else:
+            body = (
+                f"Sorry — shop rejected order {order.order_id}. "
+                "No payment will be requested."
+            )
+        return self.send_message(order, sender="business",
+                                 recipient="customer", body=body)
+
+    def notify_customer_confirmation_request(self, order: Order) -> Message:
+        body = (
+            f"Please confirm order {order.order_id}. "
+            "Reply 1 to confirm items or 2 to cancel."
+        )
+        return self.send_message(order, sender="business",
+                                 recipient="customer", body=body)
+
+    def notify_payment_prompt(self, order: Order) -> Message:
+        body = (
+            f"Order {order.order_id} is ready for payment. "
+            f"Please pay KES {order.total:,.0f} via M-Pesa."
+        )
+        return self.send_message(order, sender="business",
+                                 recipient="customer", body=body)
+
+    def notify_payment_processing(self, order: Order) -> Message:
+        body = f"Payment for order {order.order_id} is processing."
+        return self.send_message(order, sender="business",
+                                 recipient="customer", body=body)
+
+    def notify_payment_result(self, order: Order, success: bool) -> Message:
+        if success:
+            body = f"Payment confirmed for order {order.order_id}. Thank you."
+        else:
+            body = (
+                f"Payment failed for order {order.order_id}. "
+                "Please retry payment."
+            )
         return self.send_message(order, sender="business",
                                  recipient="customer", body=body)
 
     def notify_order_status(self, order: Order) -> Message:
         """Send a status-update notification to the customer."""
         status_messages = {
-            OrderStatus.PROCESSED: (
+            OrderStatus.FULFILLING: (
                 f"Your order {order.order_id} is being prepared."
             ),
-            OrderStatus.DELIVERED: (
-                f"Your order {order.order_id} has been delivered. "
-                "Thank you for your purchase!"
+            OrderStatus.READY_FOR_PICKUP: (
+                f"Your order {order.order_id} is ready for pickup."
+            ),
+            OrderStatus.OUT_FOR_DELIVERY: (
+                f"Your order {order.order_id} is out for delivery."
+            ),
+            OrderStatus.COMPLETED: (
+                f"Your order {order.order_id} is completed. Thank you!"
             ),
             OrderStatus.CANCELLED: (
                 f"Your order {order.order_id} has been cancelled. "
@@ -259,6 +320,32 @@ class MessagingService:
                 if msg.message_id in dead_ids:
                     out.append(msg)
         return out
+
+    def get_message_by_id(self, message_id: str) -> Optional[Message]:
+        for thread in self._threads.values():
+            for msg in thread.messages:
+                if msg.message_id == message_id:
+                    return msg
+        return None
+
+    def process_delivery_callback(self, message_id: str, *,
+                                  delivered: bool,
+                                  error: Optional[str] = None) -> Optional[Message]:
+        message = self.get_message_by_id(message_id)
+        if message is None:
+            return None
+        if delivered:
+            message.delivery_status = DeliveryStatus.DELIVERED
+            message.delivered_at = datetime.now(tz=timezone.utc)
+            message.last_error = None
+        else:
+            message.delivery_status = DeliveryStatus.FAILED
+            message.last_error = error or "Delivery callback marked failed."
+            if message.delivery_attempts >= self.max_delivery_attempts:
+                message.delivery_status = DeliveryStatus.DEAD_LETTER
+                self._dead_letters.append(message.message_id)
+        self._save()
+        return message
 
     def _save(self) -> None:
         self.persistence.save(
