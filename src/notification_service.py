@@ -135,7 +135,7 @@ class NotificationService:
 
         A status-update notification is sent to the customer automatically.
         """
-        order = self.orders._get_or_raise(order_id)
+        order = self.orders.get_order_or_raise(order_id)
         authorize_order_action(actor, order, (Role.BUSINESS, Role.OPERATIONS, Role.SYSTEM))
         order = self.orders.advance_order(order_id, new_status, actor=actor)
         self.messages.notify_order_status(order)
@@ -156,7 +156,7 @@ class NotificationService:
         Operations normally only intervene when automatic thresholds are
         crossed, but this method allows explicit escalation.
         """
-        order = self.orders._get_or_raise(order_id)
+        order = self.orders.get_order_or_raise(order_id)
         authorize_order_action(actor, order, (Role.OPERATIONS, Role.BUSINESS, Role.SYSTEM))
         reason = f"{trigger.value}: {detail}" if detail else trigger.value
         self.messages.alert_operations(order, reason=reason)

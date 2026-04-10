@@ -117,6 +117,9 @@ class OrderService:
             return list(self._orders.values())
         return [o for o in self._orders.values() if o.tenant_id == tenant_id]
 
+    def get_order_or_raise(self, order_id: str) -> Order:
+        return self._get_or_raise(order_id)
+
     # ------------------------------------------------------------------
     # State transitions
     # ------------------------------------------------------------------
