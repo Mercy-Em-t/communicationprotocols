@@ -23,7 +23,7 @@ Message loop rules
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from .auth import AuthContext, Role, authorize_order_action, authorize_order_read
 
@@ -66,7 +66,7 @@ class NotificationService:
         self.orders = order_service or OrderService(persistence=self.persistence)
         self.messages = messaging_service or MessagingService(persistence=self.persistence)
         self.sla_minutes = sla_minutes
-        self._sla_alerted_order_ids: set[str] = set()
+        self._sla_alerted_order_ids: Set[str] = set()
         self._audits: List[AuditEvent] = []
         self._load()
 

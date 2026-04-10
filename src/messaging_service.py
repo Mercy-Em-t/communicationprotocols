@@ -216,23 +216,6 @@ class MessagingService:
             for item in order.items
         )
 
-    # ------------------------------------------------------------------
-    # Delivery simulation
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _deliver(message: Message) -> None:
-        """
-        Simulate delivery over the message's channel.
-
-        In production this would call the WhatsApp Business API, SMS
-        gateway, push notification service, etc. The prototype routes
-        actual state changes through ``_attempt_delivery``; this method
-        is intentionally left unimplemented as an explicit extension point
-        for real channel integrations.
-        """
-        raise NotImplementedError
-
     def _dispatch_outbox(self, order_id: Optional[str] = None) -> None:
         targets = []
         for thread in self._threads.values():

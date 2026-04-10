@@ -108,7 +108,7 @@ class OperationsDashboard:
         all_summaries = list(by_business.values())
         start = max(0, (page - 1) * page_size)
         end = start + page_size
-        alerts = self._collect_ops_alerts(tenant_id=tenant_id, page=page, page_size=page_size)
+        alerts = self._collect_ops_alerts(tenant_id=tenant_id)
         return DashboardReport(
             summaries=all_summaries[start:end],
             operations_alerts=alerts,
@@ -136,8 +136,7 @@ class OperationsDashboard:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _collect_ops_alerts(self, tenant_id: Optional[str] = None,
-                            page: int = 1, page_size: int = 50) -> List[Message]:
+    def _collect_ops_alerts(self, tenant_id: Optional[str] = None) -> List[Message]:
         """Gather all messages addressed to operations across all threads."""
         alerts: List[Message] = []
         for order in self._orders.get_all_orders(tenant_id=tenant_id):
@@ -147,6 +146,4 @@ class OperationsDashboard:
             for msg in thread.messages:
                 if msg.recipient == "operations":
                     alerts.append(msg)
-        start = max(0, (page - 1) * page_size)
-        end = start + page_size
-        return alerts[start:end]
+        return alerts

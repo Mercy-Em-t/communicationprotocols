@@ -123,7 +123,12 @@ def _audit_from_dict(d: Dict[str, Any]) -> AuditEvent:
 
 
 class JsonPersistence:
-    """Tiny JSON-based persistence for this prototype."""
+    """
+    Tiny JSON-based persistence for this prototype.
+
+    ``retention_days`` is applied to audit events via ``prune_audit``.
+    Events older than that threshold are removed when new audit writes occur.
+    """
 
     def __init__(self, file_path: Optional[str] = None,
                  retention_days: int = 90) -> None:
