@@ -58,6 +58,12 @@ def _business_from_dict(d: Dict[str, Any]) -> Business:
 
 
 def _order_from_dict(d: Dict[str, Any]) -> Order:
+    customer_payload = d.get("customer", {})
+    customer_tenant = "default"
+    if isinstance(customer_payload, dict):
+        customer_tenant = customer_payload.get("tenant_id", "default")
+    tenant_id = d.get("tenant_id", customer_tenant)
+
     amendments = [
         Amendment(
             amendment_id=a["amendment_id"],
@@ -71,7 +77,7 @@ def _order_from_dict(d: Dict[str, Any]) -> Order:
         order_id=d["order_id"],
         customer=_customer_from_dict(d["customer"]),
         business=_business_from_dict(d["business"]),
-        tenant_id=d.get("tenant_id", d["customer"].get("tenant_id", "default")),
+        tenant_id=tenant_id,
         items=[OrderItem(**i) for i in d["items"]],
         status=OrderStatus(d["status"]),
         amendments=amendments,
