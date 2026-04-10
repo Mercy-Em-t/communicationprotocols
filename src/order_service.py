@@ -154,7 +154,11 @@ class OrderService:
 
         Amendments are immutable records appended to the order's audit trail.
         """
-        order = self._get_or_raise(order_id)
+        order = self._orders.get(order_id)
+        if order is None:
+            if actor is not None:
+                raise PermissionError("Not allowed to amend this order.")
+            raise KeyError(f"Order {order_id!r} not found.")
         authorize_order_action(
             actor, order, (Role.CUSTOMER, Role.BUSINESS, Role.OPERATIONS, Role.SYSTEM)
         )

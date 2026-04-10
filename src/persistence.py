@@ -132,6 +132,7 @@ class JsonPersistence:
 
     def __init__(self, file_path: Optional[str] = None,
                  retention_days: int = 90) -> None:
+        """Create store; ``retention_days`` controls audit-event retention only."""
         self.path = Path(file_path) if file_path else None
         self.retention_days = retention_days
 

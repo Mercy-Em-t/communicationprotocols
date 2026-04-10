@@ -117,10 +117,6 @@ class NotificationService:
         The amendment is appended to the immutable audit trail and an
         acknowledgement is sent back to the customer.
         """
-        order = self.orders._get_or_raise(order_id)
-        authorize_order_action(
-            actor, order, (Role.CUSTOMER, Role.BUSINESS, Role.OPERATIONS, Role.SYSTEM)
-        )
         amendment = self.orders.amend_order(order_id, description, actor=actor)
         order = self.orders.get_order(order_id, actor=actor)
         self.messages.notify_amendment_received(order, amendment.description)

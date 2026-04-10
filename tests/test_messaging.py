@@ -234,7 +234,7 @@ class TestFloodPrevention:
 
         for i in range(500):
             cust = Customer.create(f"Customer {i}",
-                                   f"+2547{i:09d}")
+                                   f"+2547{i % 1_000_000_000:09d}")
             order = svc.place_order(cust, business, [OrderItem("Product", 1, 50.0)])
             thread = svc.messages.get_thread(order.order_id)
             for msg in thread.messages:
