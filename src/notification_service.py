@@ -30,6 +30,8 @@ from .persistence import (
     serialize_order_event,
 )
 
+WEBHOOK_TIMESTAMP_MAX_AGE_SECONDS = 300
+
 
 class NotificationService:
     """Façade that coordinates strict order lifecycle + communication."""
@@ -329,7 +331,7 @@ class NotificationService:
         if message_id in self._seen_whatsapp_message_ids:
             return "duplicate_ignored"
 
-        if (datetime.now(tz=timezone.utc) - timestamp).total_seconds() > 300:
+        if (datetime.now(tz=timezone.utc) - timestamp).total_seconds() > WEBHOOK_TIMESTAMP_MAX_AGE_SECONDS:
             raise PermissionError("Webhook timestamp is too old.")
 
         order = self.orders.get_order_or_raise(order_id)

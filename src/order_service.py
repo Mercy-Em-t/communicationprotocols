@@ -27,7 +27,7 @@ from .models import (
 )
 from .persistence import JsonPersistence, deserialize_orders, serialize_order
 
-# High-value threshold (KES) that triggers an operations alert
+# High-value threshold in KES (Kenyan Shillings) that triggers an operations alert
 HIGH_VALUE_THRESHOLD = 5_000.0
 
 ALLOWED_TRANSITIONS: Dict[OrderStatus, List[OrderStatus]] = {
